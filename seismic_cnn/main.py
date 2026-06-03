@@ -216,7 +216,7 @@ print(stream)
 
 # %%
 # load earthquake catalog
-catalog = pd.read_csv("../data/data.csv")
+catalog = pd.read_csv("../data/catalog_chile.csv")
 
 SECONDS_BEFORE = 5  # seconds before origin time to start the window
 WINDOW_SAMPLES = 6000  # 6000 samples @ 100 Hz = 60 seconds
@@ -224,7 +224,7 @@ sample_rate = stream[0].stats.sampling_rate
 
 # extract one 3-channel window per catalog event
 windows, origin_times = [], []
-for _, row in catalog.iterrows():
+for _, row in catalog.iterrows():  # loop over each event in the catalog
     t_origin = UTCDateTime(
         year=int(row["Year"]),
         month=int(row["Month"]),
@@ -233,26 +233,34 @@ for _, row in catalog.iterrows():
         minute=int(row["Minute"]),
         second=int(row["Second"]),
     )
-    t_start = t_origin - SECONDS_BEFORE
-    t_end = t_start + (WINDOW_SAMPLES - 1) / sample_rate
+    t_start = (
+        t_origin - SECONDS_BEFORE
+    )  # start the window a few seconds before the origin time to capture the P-wave arrival
+    t_end = (
+        t_start + (WINDOW_SAMPLES - 1) / sample_rate
+    )  # end time of the window based on the number of samples and sampling rate
 
     try:
         Z = stream.select(channel="HHZ")[0].slice(t_start, t_end).data
         N = stream.select(channel="HHN")[0].slice(t_start, t_end).data
         E = stream.select(channel="HHE")[0].slice(t_start, t_end).data
 
-        if len(Z) != WINDOW_SAMPLES:
+        if (
+            len(Z) != WINDOW_SAMPLES
+        ):  # if any channel doesn't have the full window of data, skip this event
             continue
 
         window = np.stack([Z, N, E]).astype(np.float32)  # (3, 6000)
-        max_val = np.max(np.abs(window))
-        if max_val > 0:
-            window = window / max_val
+        max_val = np.max(
+            np.abs(window)
+        )  # find the maximum absolute value across all channels
+        if max_val > 0:  # avoid division by zero
+            window = window / max_val  # normalize to [-1, 1]
 
-        windows.append(window)
-        origin_times.append(t_origin)
+        windows.append(window)  # add the window to the list
+        origin_times.append(t_origin)  # store the origin time for reference
 
-    except Exception:
+    except Exception:  # if any channel is missing or there's an error, skip this event
         continue
 
 print(f"Extracted {len(windows)} windows from catalog")
@@ -266,7 +274,7 @@ with torch.no_grad():
     probs = model(input_tensor).cpu().numpy().flatten()
 
 # report results
-THRESHOLD = 0.7
+THRESHOLD = 0.6
 detected = probs >= THRESHOLD
 print(
     f"Detected {detected.sum()} / {len(probs)} catalog events (threshold={THRESHOLD})"
@@ -281,4 +289,22 @@ plt.ylabel("Count")
 plt.title("Model output on catalog events")
 plt.legend()
 plt.tight_layout()
+plt.savefig("../reports/catalog_probabilities.png", dpi=150, bbox_inches="tight")
 plt.show()
+
+# plot detected vs missed events
+plt.figure(figsize=(10, 6))
+for i, (t_origin, prob) in enumerate(zip(origin_times, probs)):
+    color = "green" if prob >= THRESHOLD else "red"
+    plt.scatter(t_origin.datetime, prob, color=color)
+plt.axhline(THRESHOLD, color="blue", linestyle="--", label=f"threshold={THRESHOLD}")
+plt.xlabel("Event origin time")
+plt.ylabel("Detection probability")
+plt.title("Model detections on catalog events")
+plt.legend()
+plt.tight_layout()
+plt.savefig("../reports/catalog_detections.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+
+# %%

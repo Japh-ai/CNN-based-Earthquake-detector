@@ -2,6 +2,8 @@
 
 A 1D CNN trained to classify 60-second seismograms as **earthquake** or **noise** using the [STEAD dataset](https://github.com/smousavi05/STEAD).
 
+This project was built as a personal exploration of deep learning applied to seismology, focusing on understanding CNN architectures, training pipelines, and how models trained on benchmark datasets generalize to real-world continuous recordings.
+
 ## Project structure
 
 ```
@@ -9,7 +11,7 @@ seismic_cnn/
 ├── dataset.py   # loads STEAD HDF5/CSV, normalizes, returns a PyTorch Dataset
 ├── model.py     # 1D CNN architecture (3 conv blocks + global avg pool + classifier)
 ├── train.py     # training loop, evaluation, loss tracking
-└── main.py      # full pipeline: load → train → evaluate → save
+└── main.py      # full pipeline: load → train → evaluate → apply to real data
 ```
 
 ## Data
@@ -51,3 +53,11 @@ Trained on 8000 samples per class (16,000 total), 15 epochs:
 | Precision | 0.99 |
 | Recall | 0.99 |
 | F1 | 0.99 |
+
+## Applying to a continuous stream
+
+After training and evaluation on the STEAD test set, the last section of `main.py` takes the model a step further and applies it to a real continuous seismograph recording. 5 days of 3-component waveforms are fetched from station `CX.PB01` (IPOC network, **northern Chile**) via the GFZ FDSN web service, data the model has never seen, from a station not present in STEAD.
+
+A local earthquake catalog is used to extract 60-second windows around known event origin times. The model outputs a detection probability for each window. Results are visualized as:
+- A **probability histogram** showing the distribution of model confidence across all catalog events
+- A **scatter plot** of detection probability vs. origin time, with detected events (≥ 0.6) highlighted in green and missed events in red
