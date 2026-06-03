@@ -197,3 +197,88 @@ plt.show()
 
 
 # %%
+# --- Apply to real continuous stream ---
+import pandas as pd
+import numpy as np
+from obspy.clients.fdsn import Client
+from obspy import UTCDateTime
+
+# fetch 5 days of continuous data from GFZ
+client = Client("GFZ")
+t0 = UTCDateTime("2007/01/01 02:00:00")
+t1 = t0 + 5 * 24 * 60 * 60
+
+print("Downloading stream...")
+stream = client.get_waveforms(
+    network="CX", station="PB01", location="*", channel="HH?", starttime=t0, endtime=t1
+)
+print(stream)
+
+# %%
+# load earthquake catalog
+catalog = pd.read_csv("../data/data.csv")
+
+SECONDS_BEFORE = 5  # seconds before origin time to start the window
+WINDOW_SAMPLES = 6000  # 6000 samples @ 100 Hz = 60 seconds
+sample_rate = stream[0].stats.sampling_rate
+
+# extract one 3-channel window per catalog event
+windows, origin_times = [], []
+for _, row in catalog.iterrows():
+    t_origin = UTCDateTime(
+        year=int(row["Year"]),
+        month=int(row["Month"]),
+        day=int(row["Day"]),
+        hour=int(row["Hour"]),
+        minute=int(row["Minute"]),
+        second=int(row["Second"]),
+    )
+    t_start = t_origin - SECONDS_BEFORE
+    t_end = t_start + (WINDOW_SAMPLES - 1) / sample_rate
+
+    try:
+        Z = stream.select(channel="HHZ")[0].slice(t_start, t_end).data
+        N = stream.select(channel="HHN")[0].slice(t_start, t_end).data
+        E = stream.select(channel="HHE")[0].slice(t_start, t_end).data
+
+        if len(Z) != WINDOW_SAMPLES:
+            continue
+
+        window = np.stack([Z, N, E]).astype(np.float32)  # (3, 6000)
+        max_val = np.max(np.abs(window))
+        if max_val > 0:
+            window = window / max_val
+
+        windows.append(window)
+        origin_times.append(t_origin)
+
+    except Exception:
+        continue
+
+print(f"Extracted {len(windows)} windows from catalog")
+
+# %%
+# run model on all windows
+input_tensor = torch.tensor(np.array(windows), dtype=torch.float32).to(DEVICE)
+
+model.eval()
+with torch.no_grad():
+    probs = model(input_tensor).cpu().numpy().flatten()
+
+# report results
+THRESHOLD = 0.7
+detected = probs >= THRESHOLD
+print(
+    f"Detected {detected.sum()} / {len(probs)} catalog events (threshold={THRESHOLD})"
+)
+
+# plot probability distribution
+plt.figure(figsize=(10, 4))
+plt.hist(probs, bins=30, edgecolor="black")
+plt.axvline(THRESHOLD, color="red", linestyle="--", label=f"threshold={THRESHOLD}")
+plt.xlabel("Detection probability")
+plt.ylabel("Count")
+plt.title("Model output on catalog events")
+plt.legend()
+plt.tight_layout()
+plt.show()
